@@ -1,0 +1,44 @@
+# Project Overview
+You are building a "Zero-Server Privacy-First Medical Jargon Translator". 
+The core philosophy is absolute privacy: medical text must NEVER be sent to a backend server or external API. All AI inference must happen locally in the user's browser using Google's LiteRT-LM and WebGPU.
+
+# Tech Stack
+- Framework: Next.js (App Router)
+- Language: TypeScript
+- Styling: Tailwind CSS
+- PWA Support: `next-pwa`
+- AI Runtime: `@litertjs/core` (LiteRT-LM for web)
+
+# Strict Architectural Rules
+
+## 1. Zero-Server Guarantee (Client-Side Only)
+- NEVER write server-side code (`process.env`, Node.js APIs, Next.js API routes) for handling the user's medical text or AI generation.
+- All AI processing must occur in the browser. 
+- Components handling the chat/translation MUST include the `"use client"` directive at the very top.
+
+## 2. Web Worker Offloading
+- NEVER run the LiteRT-LM engine directly on the main thread inside a React component. It will freeze the UI.
+- You MUST create a dedicated Web Worker (e.g., `public/llm-worker.js` or `workers/llm-worker.ts`) to handle model downloading, initialization, and inference.
+- React components must communicate with the Web Worker via `postMessage` and event listeners.
+
+## 3. Model Caching (OPFS)
+- The `.litertlm` model file is large (several gigabytes). 
+- You MUST implement logic in the Web Worker to cache the downloaded model into the browser's Origin Private File System (OPFS) so the user only downloads it once.
+
+## 4. Hardware Fallbacks & Graceful Degradation
+- By default, attempt to initialize the LiteRT engine with the `webgpu` backend for maximum performance.
+- You MUST write fallback logic: if `navigator.gpu` is undefined or initialization fails, fallback to the `wasm` (CPU) backend.
+- Before initializing, check device memory (`navigator.deviceMemory`). If RAM is low (< 8GB), prompt the user or load a smaller model variant (like 1B or 2B) instead of the 4B model.
+
+## 5. UI and UX Requirements
+- The UI must feature persistent, un-hideable disclaimers stating: "This is an AI translation tool, not a doctor. Not medical advice."
+- Include a prominent visual badge stating: "100% Local Processing - Your data never leaves this device."
+- When the model is generating text, the UI must stream the response word-by-word.
+- Show clear loading states (e.g., "Downloading Model (2.4GB) - This only happens once", "Initializing WebGPU", "Generating...").
+
+# Code Style Guidelines
+- Use strictly typed TypeScript. Define Interfaces/Types for all Web Worker payloads.
+- Use Tailwind CSS for responsive styling. Ensure it looks excellent on mobile devices.
+- Handle all asynchronous errors gracefully with `try/catch` blocks and user-facing error messages in the UI.
+- Use `lucide-react` for simple, clean icons.
+   
