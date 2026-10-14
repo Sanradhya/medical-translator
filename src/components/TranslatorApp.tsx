@@ -1,13 +1,17 @@
 "use client";
 
 import { readStoredVariant, useLlmWorker } from "@/hooks/useLlmWorker";
+import { readPrescription } from "@/lib/read-prescription";
 import { freeStorageBytes, modelFits } from "@/lib/hardware";
 import { MODELS, formatBytes } from "@/lib/models";
 import type { ModelVariant } from "@/types/worker";
 import {
   AlertTriangle,
+  Check,
+  Copy,
   Cpu,
   Download,
+  ImageUp,
   LoaderCircle,
   Plus,
   SendHorizontal,
@@ -113,8 +117,9 @@ export function TranslatorApp() {
               Translate a chart into everyday words
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600 sm:text-base">
-              The model downloads once into this browser&apos;s private storage, then reads
-              your text on this device. Nothing is sent to a translation server.
+              The model downloads once into this browser&apos;s private storage. After that you
+              can paste a prescription or upload a photo or PDF. Reading and translation stay
+              on this device.
             </p>
 
             <HardwareNote
@@ -329,6 +334,40 @@ function ChatPanel({
   onReset: () => void;
   onExample: (example: string) => void;
 }) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [reading, setReading] = useState(false);
+  const [readNote, setReadNote] = useState<string | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const controlsLocked = busy || reading;
+
+  async function onFile(file: File | undefined) {
+    if (!file || controlsLocked) {
+      return;
+    }
+    setReading(true);
+    setReadError(null);
+    setReadNote("Reading the prescription on this device");
+    try {
+      const result = await readPrescription(file, setReadNote);
+      const text = result.text.slice(0, 12000);
+      setDraft(text);
+      setReadNote(
+        result.source === "ocr"
+          ? "Check this against your prescription before translating. Handwriting is often misread."
+          : "Check this text, then translate it. The PDF’s own words were used.",
+      );
+      inputRef.current?.focus();
+    } catch (error) {
+      setReadNote(null);
+      setReadError(error instanceof Error ? error.message : "The prescription could not be read.");
+    } finally {
+      setReading(false);
+      if (fileRef.current) {
+        fileRef.current.value = "";
+      }
+    }
+  }
+
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -355,7 +394,7 @@ function ChatPanel({
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         {messages.length === 0 ? (
           <div className="rounded-3xl border border-dashed border-teal-200 bg-white/70 px-4 py-6">
-            <p className="font-medium text-teal-950">Try a line from a note</p>
+            <p className="font-medium text-teal-950">Paste a note, or upload a prescription photo</p>
             <div className="mt-3 flex flex-col gap-2">
               {EXAMPLES.map((example) => (
                 <button
@@ -380,9 +419,14 @@ function ChatPanel({
                   : "bg-white text-slate-800 shadow-card"
               }`}
             >
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide opacity-70">
-                {message.role === "user" ? "Chart text" : "Plain language"}
-              </p>
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-wide opacity-70">
+                  {message.role === "user" ? "Prescription or chart" : "Plain language"}
+                </p>
+                {message.role === "assistant" && !message.pending && message.content.trim() ? (
+                  <CopyButton text={message.content} tone="light" />
+                ) : null}
+              </div>
               <p className="whitespace-pre-wrap">
                 {message.content}
                 {message.pending ? (
@@ -402,7 +446,7 @@ function ChatPanel({
         className="mt-3 rounded-3xl border border-slate-200 bg-white p-2 shadow-card"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!busy) {
+          if (!controlsLocked) {
             onTranslate();
           }
         }}
@@ -414,24 +458,59 @@ function ChatPanel({
           id="medical-text"
           ref={inputRef}
           value={draft}
-          rows={3}
-          maxLength={6000}
-          disabled={busy}
-          placeholder="Paste a sentence from a note, result, or prescription"
-          onChange={(event) => setDraft(event.target.value)}
+          rows={Math.min(8, Math.max(3, draft.split("\n").length))}
+          maxLength={12000}
+          disabled={controlsLocked}
+          placeholder="Paste a prescription or note, or upload a photo"
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setReadError(null);
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              if (!busy) {
+              if (!controlsLocked) {
                 onTranslate();
               }
             }
           }}
           className="w-full resize-none bg-transparent px-3 py-2 text-base leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-60"
         />
-        <div className="flex items-center justify-between gap-3 px-2 pb-1">
-          <p className="text-xs text-slate-500">{draft.length}/6000</p>
-          {busy ? (
+        {readNote ? <p className="px-3 pb-1 text-xs leading-5 text-teal-900">{readNote}</p> : null}
+        {readError ? (
+          <p role="alert" className="px-3 pb-1 text-xs leading-5 text-rose-700">
+            {readError}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap items-center justify-between gap-3 px-2 pb-1">
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-slate-500">{draft.length}/12000</p>
+            {draft.trim() ? <CopyButton text={draft} tone="light" label="Copy text" /> : null}
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,.pdf"
+              className="sr-only"
+              onChange={(event) => {
+                void onFile(event.target.files?.[0]);
+              }}
+            />
+            <button
+              type="button"
+              disabled={controlsLocked}
+              onClick={() => fileRef.current?.click()}
+              className="inline-flex items-center gap-2 rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-teal-900 ring-1 ring-teal-200 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {reading ? (
+                <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
+              ) : (
+                <ImageUp aria-hidden="true" className="h-4 w-4" />
+              )}
+              {reading ? "Reading" : "Upload"}
+            </button>
+            {busy ? (
             <button
               type="button"
               onClick={onCancel}
@@ -450,8 +529,50 @@ function ChatPanel({
               Translate
             </button>
           )}
+          </div>
         </div>
       </form>
     </>
+  );
+}
+
+function CopyButton({
+  text,
+  tone,
+  label = "Copy",
+}: {
+  text: string;
+  tone: "light" | "dark";
+  label?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(
+          () => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1600);
+          },
+          () => {
+            setCopied(false);
+          },
+        );
+      }}
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
+        tone === "dark"
+          ? "bg-white/15 text-white"
+          : "bg-slate-100 text-slate-700"
+      }`}
+    >
+      {copied ? (
+        <Check aria-hidden="true" className="h-3 w-3" />
+      ) : (
+        <Copy aria-hidden="true" className="h-3 w-3" />
+      )}
+      {copied ? "Copied" : label}
+    </button>
   );
 }

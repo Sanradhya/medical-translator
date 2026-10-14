@@ -9,5 +9,7 @@ public/worker-*.js
 public/worker-*.js.map
 public/fallback-*.js
 public/litertlm
+public/ocr
+public/pdf.worker.min.mjs
 .DS_Store
 *.tsbuildinfo
